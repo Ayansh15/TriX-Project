@@ -217,10 +217,9 @@ def run_scan(db: Session, trigger_fact: Fact | None = None) -> dict:
         fuzzy = fuzzy_fact_mentions(asset.extracted_text, [(fact.name, fact.value)])
         for match in matches:
             active_assets.add(asset.id)
-            active = db.scalar(select(Finding).where(Finding.asset_id == asset.id,
+            active = db.scalar(select(Finding).where(Finding.asset_id == asset.id, Finding.fact_id == fact.id,
                                                        Finding.kind == "change_impact", Finding.status.notin_(["Approved", "Dismissed"])))
             if active:
-                active.fact_id = fact.id
                 active.detected_value = match["value"]; active.approved_value = fact.value; active.excerpt = match["excerpt"]
                 active.match_type = match["match_type"]; active.confidence = match["confidence"]
                 continue

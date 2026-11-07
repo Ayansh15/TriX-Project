@@ -16,8 +16,5 @@
     "react-dom": "latest",
     "lucide-react": "latest"
   },
-  "devDependencies": {
-    "@types/react": "latest",
-    "@types/react-dom": "latest"
-  }
+  "devDependencies": {}
 }

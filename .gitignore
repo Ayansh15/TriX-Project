@@ -1,9 +1,0 @@
-node_modules/
-dist/
-.venv/
-backend/__pycache__/
-backend/app/__pycache__/
-backend/brandguard.db
-backend/uploads/
-uploads/
-.env
