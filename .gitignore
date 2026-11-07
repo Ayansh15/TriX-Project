@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+brandguard.db
+backend/brandguard.db
+uploads/
+backend/uploads/
+.env
+backend/.env
+*.tsbuildinfo

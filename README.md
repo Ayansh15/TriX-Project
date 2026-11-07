@@ -1,24 +1,41 @@
-# BrandGuard AI
+# BrandGuard AI · TriX Team
 
-BrandGuard AI is a browser-based product demo for the TriX project. It follows the supplied PRD and Round 1 deck: teams keep approved brand facts in one place, identify content that may be affected by a change, and route explainable findings to a human review queue.
+A full stack brand operations workspace. Teams manage approved facts, index campaign content, scan for outdated statements, route potential matches to people, track evidence for claims, and export audit reports.
 
-## Run the demo
+## Run locally
 
-Open `index.html` in a current desktop or mobile browser. The demo uses plain HTML, CSS, and JavaScript, so it does not need a package install, build step, or server.
+Start the FastAPI service in one terminal:
 
-## Main workflows
+```powershell
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --app-dir backend --reload --port 8000
+```
 
-- Update the monthly plan price from **Brand facts** and review the matching uploaded or registered content in **Change impact**.
-- Search and filter the sample asset library, add campaign copy, or upload supported sample files.
-- Review findings, attach a claim source, confirm or dismiss a match, and keep an audit history.
-- Register approved facts and promotional claims.
-- Explore the market insight screen, which labels its example prices and trend as illustrative sample data.
-- Export impact and audit reports as CSV.
+Start the React workspace in another terminal:
 
-The sample workspace contains nine visible assets. Changes made in the demo are saved in the browser's local storage. Use **Settings → Reset demo data** to restore the initial sample state.
+```powershell
+npm run dev
+```
 
-## Prototype boundaries
+Open [http://127.0.0.1:5173/](http://127.0.0.1:5173/). The Vite server proxies `/api` and `/files` to FastAPI. A local SQLite database is used by default and seeded with sample workspace data.
 
-This project is a local front-end prototype, not a production service. It does not include the FastAPI/PostgreSQL or React/Express/PostgreSQL backend options discussed in the source materials. Text matching runs in the browser for registered text and plain text files. Uploaded images and PDFs are represented by sample extraction status; OCR/PDF parsing and visual-region matching are not implemented. There are no live website, email, ad account, or social channel integrations. The market insights are illustrative and do not use sourced competitor data. Claim sources are recorded for human assessment but are not independently verified. Reviewer actions stay in local browser storage and do not publish changes to any channel.
+## Full container stack
 
-The supplied PRD treats customer needs and differentiation as hypotheses. This demo does not present them as validated research findings.
+```powershell
+docker compose up --build
+```
+
+This starts the React web app, FastAPI, and PostgreSQL. Configure `DATABASE_URL` and `UPLOAD_DIR` with environment variables when running outside the compose stack.
+
+## PRD technology coverage
+
+The web interface uses React, TypeScript, Vite, and Lucide icons. The API uses Python, FastAPI, SQLAlchemy, and PostgreSQL (SQLite for local development). File extraction uses pypdf for PDFs, pandas and Python's csv module for tabular content, RapidFuzz for fuzzy matching, Pillow for image handling, and pytesseract with the Tesseract executable for OCR. The container installs Tesseract. In a local Windows run, image OCR requires Tesseract to be installed and discoverable on PATH.
+
+## Workspace workflows
+
+- Add versioned approved facts and record their source, scope, effective date, and approver.
+- Register copy or upload supported files, then run an impact scan.
+- Review exact excerpts and decide whether findings are valid, dismissed, or need correction.
+- Record claims and evidence for human review, inspect audit history, and export reports.
+- Explore market insights, clearly identified as illustrative sample context.
+
+Scan results are potential matches for human review. The prototype does not publish content or connect to live ad, email, website, or social channels. Evidence records are not independently verified against external registries.
