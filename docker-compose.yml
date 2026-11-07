@@ -15,5 +15,31 @@ services:
       timeout: 5s
       retries: 10
 
+  api:
+    build:
+      context: ./backend
+    environment:
+      DATABASE_URL: postgresql+psycopg://brandguard:brandguard@postgres:5432/brandguard
+      UPLOAD_DIR: /data/uploads
+      MAX_UPLOAD_MB: 20
+    ports:
+      - "8000:8000"
+    volumes:
+      - brandguard-uploads:/data/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  web:
+    build:
+      context: .
+    environment:
+      API_PROXY_TARGET: http://api:8000
+    ports:
+      - "5173:5173"
+    depends_on:
+      - api
+
 volumes:
   brandguard-postgres:
+  brandguard-uploads:

@@ -1,0 +1,16 @@
+Metadata-Version: 2.4
+Name: brandguard-ai-api
+Version: 1.0.0
+Summary: BrandGuard AI change impact, claim evidence, and review API
+Requires-Python: >=3.11
+Requires-Dist: fastapi<1,>=0.115
+Requires-Dist: uvicorn[standard]<1,>=0.30
+Requires-Dist: sqlalchemy<3,>=2.0
+Requires-Dist: psycopg[binary]<4,>=3.2
+Requires-Dist: python-multipart<1,>=0.0.9
+Requires-Dist: pydantic-settings<3,>=2.5
+Requires-Dist: pypdf<7,>=5
+Requires-Dist: pandas<4,>=2.2
+Requires-Dist: rapidfuzz<4,>=3.10
+Requires-Dist: Pillow<13,>=10
+Requires-Dist: pytesseract<1,>=0.3.13
