@@ -57,6 +57,8 @@ class Finding(Base):
     confidence: Mapped[str] = mapped_column(String(20), default="Medium")
     match_type: Mapped[str] = mapped_column(String(80), default="Exact")
     owner: Mapped[str] = mapped_column(String(120), default="Unassigned")
+    due_date: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    location: Mapped[str] = mapped_column(String(160), default="Text excerpt")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     asset: Mapped[Asset | None] = relationship(back_populates="findings")

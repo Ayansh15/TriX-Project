@@ -1,41 +1,85 @@
-# BrandGuard AI · TriX Team
+# BrandGuard AI · Team TriX
 
-A full stack brand operations workspace. Teams manage approved facts, index campaign content, scan for outdated statements, route potential matches to people, track evidence for claims, and export audit reports.
+BrandGuard AI helps a team find uploaded campaign content that may be stale after an approved brand fact changes. It shows the extracted excerpt, detected and approved values, match rationale, and review controls so a person can make the final decision.
 
-## Run locally
+## Quick start
 
-Start the FastAPI service in one terminal:
+### Option A: Docker Compose (recommended)
 
-```powershell
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --app-dir backend --reload --port 8000
-```
-
-Start the React workspace in another terminal:
-
-```powershell
-npm run dev
-```
-
-Open [http://127.0.0.1:5173/](http://127.0.0.1:5173/). The Vite server proxies `/api` and `/files` to FastAPI. A local SQLite database is used by default and seeded with sample workspace data.
-
-## Full container stack
+Install Docker Desktop, then from the repository root run:
 
 ```powershell
 docker compose up --build
 ```
 
-This starts the React web app, FastAPI, and PostgreSQL. Configure `DATABASE_URL` and `UPLOAD_DIR` with environment variables when running outside the compose stack.
+Open `http://localhost:5173`. Compose starts PostgreSQL, the FastAPI service, and the web frontend. The API container installs Tesseract. Set `POSTGRES_PASSWORD` before starting if you need a non-development database password.
 
-## PRD technology coverage
+### Option B: Run services locally
 
-The web interface uses React, TypeScript, Vite, and Lucide icons. The API uses Python, FastAPI, SQLAlchemy, and PostgreSQL (SQLite for local development). File extraction uses pypdf for PDFs, pandas and Python's csv module for tabular content, RapidFuzz for fuzzy matching, Pillow for image handling, and pytesseract with the Tesseract executable for OCR. The container installs Tesseract. In a local Windows run, image OCR requires Tesseract to be installed and discoverable on PATH.
+Requirements: Python 3.11 or later, Node.js 20 or later, and npm.
 
-## Workspace workflows
+Terminal 1:
 
-- Add versioned approved facts and record their source, scope, effective date, and approver.
-- Register copy or upload supported files, then run an impact scan.
-- Review exact excerpts and decide whether findings are valid, dismissed, or need correction.
-- Record claims and evidence for human review, inspect audit history, and export reports.
-- Explore market insights, clearly identified as illustrative sample context.
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -e backend
+python -m uvicorn app.main:app --app-dir backend --reload --port 8000
+```
 
-Scan results are potential matches for human review. The prototype does not publish content or connect to live ad, email, website, or social channels. Evidence records are not independently verified against external registries.
+Terminal 2:
+
+```powershell
+npm install
+npm run dev -- --port 5173
+```
+
+Open `http://127.0.0.1:5173`. Vite proxies `/api` and `/files` to FastAPI. SQLite and seeded demo data are used by default. To enable OCR locally, install Tesseract and make the executable available on `PATH` (or set `TESSERACT_CMD`).
+
+## First-use walkthrough
+
+The first visit opens a short guide; use **Guide** in the header to replay it. The main journey is:
+
+1. **Brand facts**: add or update the approved value, source, scope, effective date, and approver. Saving a new version triggers a scan.
+2. **Asset library**: upload or register content. Open **Preview extracted text** on an asset to review what the scanner received and why a file may need manual checking.
+3. **Change impact**: compare the detected value with the current approved value. Review the excerpt, location, match type, confidence, and explanation.
+4. **Review queue**: filter by status or confidence, assign a teammate and due date, then progress the item through review, correction, and resolution.
+5. **Overview and audit history**: track open, assigned, in-review, correction, resolved, and overdue counts; inspect fact changes, scans, assignments, and reviewer decisions.
+
+Review statuses include New, In Review, Confirmed issue, Sent for Correction, Needs clarification, Approved, Dismissed, and Resolved. After checking a correction, choose **Mark resolved**. That decision updates dashboard progress and is recorded in audit history.
+
+Supported uploads: TXT, Markdown, CSV, XLSX, DOCX, JSON, PDF, PNG, JPG/JPEG, WEBP, and TIFF, up to 20 MB each. PDF text extraction uses pypdf. Image and embedded-PDF-image OCR requires Tesseract. Unsupported, unreadable, and OCR-unavailable files are marked instead of silently treated as indexed text.
+
+## Technology
+
+- Frontend: React, TypeScript, Vite, and Lucide icons.
+- API: Python and FastAPI with Pydantic request validation.
+- Persistence: SQLAlchemy; SQLite for local runs and PostgreSQL in Docker Compose.
+- Extraction and matching: pypdf, pandas when available, Python's built-in csv fallback, RapidFuzz when available, Pillow, pytesseract, and Tesseract.
+- DOCX and XLSX text are read from their OpenXML package files. Price matching is deterministic; approximate wording matches are suggestions for a human reviewer. There is no LLM-backed matching in this release.
+
+## Tests
+
+Install the optional test dependencies and run:
+
+```powershell
+python -m pip install -e "backend[test]"
+python -m pytest backend/tests -q
+npm run build
+```
+
+The backend tests cover extraction, explainable match fields, upload error handling, reviewer assignment, status transitions, resolution progress, repeated actions, and audit events. The main browser path is: update a fact → upload/register content → scan → inspect the finding → assign a reviewer/due date → send for correction → mark resolved → confirm dashboard and audit updates.
+
+## Honest scope
+
+Scans cover files uploaded or registered in the workspace only. The product does not connect to or publish to websites, email, social platforms, or ad accounts. Claim evidence is stored for human review and is not independently checked against registries. Market-price values shown in the insights prototype are illustrative; no competitor feed or model-generated recommendation is connected. Reviewer names are a demo list, not authenticated accounts or permission roles.
+
+GitHub Pages can host the built frontend, but this API-backed app also needs a separately hosted API and database. The repository's Docker setup is the complete local deployment path. A public deployment URL must be configured and verified before it is submitted as a judge-accessible link.
+
+## Project files
+
+- `backend/app/`: API, SQLAlchemy models, schemas, and extraction/matching logic.
+- `src/`: React application and theme.
+- `docker-compose.yml`: PostgreSQL, API, and web services.
+- `docs/ROUND3_PRD.md`: detailed product requirements, delivered scope, quality plan, and roadmap.
+- `docs/`: Round 3 submission PDF and editable presentation.

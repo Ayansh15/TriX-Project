@@ -1,5 +1,5 @@
 from __future__ import annotations
-from datetime import datetime
+from datetime import date, datetime
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -38,9 +38,15 @@ class ClaimOut(ClaimCreate):
 
 
 class ReviewDecision(BaseModel):
-    action: str = Field(pattern="^(confirm|dismiss|correction|clarify|approve)$")
-    owner: str = "Ayan Sharma"
+    action: str = Field(pattern="^(confirm|dismiss|correction|clarify|approve|resolve)$")
+    owner: str | None = Field(default=None, min_length=1, max_length=120)
     comment: str = ""
+
+
+class ReviewAssignment(BaseModel):
+    owner: str = Field(min_length=1, max_length=120)
+    due_date: date | None = None
+    comment: str = Field(default="", max_length=1000)
 
 
 class EvidenceUpdate(BaseModel):

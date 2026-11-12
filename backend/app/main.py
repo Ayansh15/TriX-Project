@@ -1,20 +1,20 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Generator
 
 from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import select, desc, func
+from sqlalchemy import select, desc, func, inspect, text
 from sqlalchemy.orm import Session, joinedload
 
 from .database import Base, SessionLocal, engine
 from .models import Asset, AuditEvent, Claim, Fact, Finding, now_utc
-from .processing import UPLOAD_DIR, extract_upload, fuzzy_fact_mentions, ocr_available, price_matches
-from .schemas import ClaimCreate, EvidenceUpdate, FactCreate, ReviewDecision
+from .processing import UPLOAD_DIR, extract_upload, fuzzy_fact_mentions, ocr_available, price_matches, store_upload
+from .schemas import ClaimCreate, EvidenceUpdate, FactCreate, ReviewAssignment, ReviewDecision
 
 Base.metadata.create_all(bind=engine)
 app = FastAPI(title="BrandGuard AI API", version="1.0.0", description="Evidence-linked brand content review and change impact API")
@@ -82,6 +82,12 @@ def seed(db: Session) -> None:
 @app.on_event("startup")
 def initialize() -> None:
     Base.metadata.create_all(bind=engine)
+    finding_columns = {column["name"] for column in inspect(engine).get_columns("findings")}
+    with engine.begin() as connection:
+        if "due_date" not in finding_columns:
+            connection.execute(text("ALTER TABLE findings ADD COLUMN due_date VARCHAR(10)"))
+        if "location" not in finding_columns:
+            connection.execute(text("ALTER TABLE findings ADD COLUMN location VARCHAR(160) NOT NULL DEFAULT 'Text excerpt'"))
     with SessionLocal() as db:
         seed(db)
 
@@ -92,6 +98,7 @@ def finding_dict(f: Finding) -> dict:
         "status": f.status, "detected_value": f.detected_value, "approved_value": f.approved_value,
         "excerpt": f.excerpt, "reason": f.reason, "suggested_action": f.suggested_action,
         "confidence": f.confidence, "match_type": f.match_type, "owner": f.owner,
+        "due_date": f.due_date, "location": f.location,
         "asset": {"id": f.asset.id, "name": f.asset.name, "channel": f.asset.channel, "media_type": f.asset.media_type} if f.asset else None,
         "created_at": f.created_at,
     }
@@ -115,21 +122,25 @@ def claim_dict(c: Claim) -> dict:
 
 @app.get("/api/health")
 def health(db: Session = Depends(get_db)) -> dict:
-    from .processing import pd, PdfReader, Image
+    from .processing import pd, PdfReader, Image, fuzz, _get_pytesseract
     db.scalar(select(func.count(Asset.id)))
     return {"status": "ok", "database": "connected", "database_dialect": engine.dialect.name,
-            "processing": {"pypdf": True, "pandas": pd.__version__, "python_csv": True, "rapidfuzz": True,
-                           "pillow": Image.__version__, "pytesseract": True, "tesseract_binary": ocr_available(), "scanned_pdf_ocr": False}}
+            "processing": {"pypdf": True, "pandas": pd.__version__ if pd is not None else "Unavailable · csv fallback active", "python_csv": True, "rapidfuzz": fuzz is not None,
+                           "pillow": Image.__version__ if Image is not None else "Unavailable", "pytesseract": _get_pytesseract() is not None, "tesseract_binary": ocr_available(), "scanned_pdf_ocr": ocr_available()}}
 
 
 @app.get("/api/summary")
 def summary(db: Session = Depends(get_db)) -> dict:
     assets = db.scalar(select(func.count(Asset.id))) or 0
     facts = db.scalar(select(func.count(Fact.id)).where(Fact.active.is_(True))) or 0
-    findings = db.scalar(select(func.count(Finding.id)).where(Finding.status.notin_(["Approved", "Dismissed"]))) or 0
+    findings = db.scalar(select(func.count(Finding.id)).where(Finding.status.notin_(["Approved", "Dismissed", "Resolved"]))) or 0
     claims = db.scalar(select(func.count(Claim.id)).where(Claim.evidence_status != "Evidence attached")) or 0
+    statuses = {status: count for status, count in db.execute(select(Finding.status, func.count(Finding.id)).group_by(Finding.status)).all()}
+    assigned = db.scalar(select(func.count(Finding.id)).where(Finding.owner != "Unassigned", Finding.status.notin_(["Approved", "Dismissed", "Resolved"]))) or 0
+    overdue = db.scalar(select(func.count(Finding.id)).where(Finding.due_date < date.today().isoformat(), Finding.status.notin_(["Approved", "Dismissed", "Resolved"]))) or 0
     return {"assets": assets, "facts": facts, "open_findings": findings, "claims_to_review": claims,
-            "high_priority": db.scalar(select(func.count(Finding.id)).where(Finding.severity == "High", Finding.status.notin_(["Approved", "Dismissed"]))) or 0}
+            "high_priority": db.scalar(select(func.count(Finding.id)).where(Finding.severity == "High", Finding.status.notin_(["Approved", "Dismissed", "Resolved"]))) or 0,
+            "review_progress": {"open": findings, "assigned": assigned, "in_review": statuses.get("In Review", 0), "sent_for_correction": statuses.get("Sent for Correction", 0), "resolved": statuses.get("Resolved", 0) + statuses.get("Approved", 0) + statuses.get("Dismissed", 0), "overdue": overdue}}
 
 
 @app.get("/api/facts")
@@ -165,7 +176,7 @@ def list_assets(q: str = "", status: str = "", channel: str = "", db: Session = 
     assets = db.scalars(stmt).all()
     result = [asset_dict(a) for a in assets]
     if status:
-        ids = {f.asset_id for f in db.scalars(select(Finding).where(Finding.status.notin_(["Approved", "Dismissed"]))).all()}
+        ids = {f.asset_id for f in db.scalars(select(Finding).where(Finding.status.notin_(["Approved", "Dismissed", "Resolved"]))).all()}
         result = [a for a in result if ("Needs review" if a["id"] in ids else "Reviewed") == status]
     return result
 
@@ -190,8 +201,9 @@ async def upload_assets(files: list[UploadFile] = File(...), channel: str = "Upl
             text, status, method = extract_upload(upload.filename, upload.content_type or "application/octet-stream", content)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
+        stored_filename = store_upload(upload.filename, content) if status != "Unsupported format" else None
         asset = Asset(name=upload.filename[:300], media_type=upload.content_type or "application/octet-stream", channel=channel[:100],
-                      filename=Path(upload.filename).name, extracted_text=text[:2_000_000], processing_status=status, extraction_method=method)
+                      filename=stored_filename, extracted_text=text[:2_000_000], processing_status=status, extraction_method=method)
         db.add(asset); db.flush()
         log(db, "asset_uploaded", f"Asset uploaded: {asset.name}", f"{asset.processing_status} · {asset.extraction_method}")
         results.append(asset)
@@ -218,29 +230,32 @@ def run_scan(db: Session, trigger_fact: Fact | None = None) -> dict:
         for match in matches:
             active_assets.add(asset.id)
             active = db.scalar(select(Finding).where(Finding.asset_id == asset.id, Finding.fact_id == fact.id,
-                                                       Finding.kind == "change_impact", Finding.status.notin_(["Approved", "Dismissed"])))
+                                                       Finding.kind == "change_impact", Finding.status.notin_(["Approved", "Dismissed", "Resolved"])))
             if active:
                 active.detected_value = match["value"]; active.approved_value = fact.value; active.excerpt = match["excerpt"]
                 active.match_type = match["match_type"]; active.confidence = match["confidence"]
+                active.location = match["location"]
+                active.reason = f"The asset contains {match['value']} while the current approved value is {fact.value}; detected at {match['location']} based on {match['basis']}."
                 continue
             code = f"BG-{datetime.now(timezone.utc).strftime('%y%m%d%H%M%S%f')}-{asset.id}"
             db.add(Finding(code=code, asset_id=asset.id, fact_id=fact.id, title="Potential outdated price", kind="change_impact",
                            severity="High" if fact.effective_date and fact.effective_date <= datetime.now(timezone.utc).date().isoformat() else "Medium",
                            status="New", detected_value=match["value"], approved_value=fact.value, excerpt=match["excerpt"],
-                           reason=f"The asset contains {match['value']} while the current approved value is {fact.value}.",
+                           location=match["location"],
+                           reason=f"The asset contains {match['value']} while the current approved value is {fact.value}; detected at {match['location']} based on {match['basis']}.",
                            suggested_action="Confirm the product, market and effective date, then update the source asset if needed.",
                            confidence=match["confidence"], match_type=match["match_type"]))
             created += 1
         # Save approximate wording suggestions as review findings without calling them errors.
         for suggestion in fuzzy:
-            if db.scalar(select(Finding.id).where(Finding.asset_id == asset.id, Finding.kind == "fuzzy_fact", Finding.status.notin_(["Approved", "Dismissed"]))):
+            if db.scalar(select(Finding.id).where(Finding.asset_id == asset.id, Finding.kind == "fuzzy_fact", Finding.status.notin_(["Approved", "Dismissed", "Resolved"]))):
                 continue
             db.add(Finding(code=f"BG-FUZZY-{datetime.now(timezone.utc).strftime('%y%m%d%H%M%S%f')}-{asset.id}", asset_id=asset.id, fact_id=fact.id,
                            title="Approximate approved fact wording", kind="fuzzy_fact", severity="Low", status="Needs clarification",
                            detected_value=suggestion["value"], approved_value=fact.value, excerpt=asset.extracted_text[:400],
                            reason=f"Wording may be related to an approved fact (similarity {suggestion['score']}%). This is a possible match only.",
                            suggested_action="Compare the full content with the approved source and decide whether any change is needed.",
-                           confidence="Low", match_type=suggestion["match_type"]))
+                           confidence="Low", match_type=suggestion["match_type"], location="Text excerpt"))
             created += 1
     db.flush()
     log(db, "scan", "Change impact scan completed", f"{len(assets)} indexed assets examined; {len(active_assets)} exact/normalized price asset matches; {created} new findings.")
@@ -258,7 +273,7 @@ def scan(db: Session = Depends(get_db)) -> dict:
 def list_findings(status: str = "", kind: str = "", q: str = "", db: Session = Depends(get_db)) -> list[dict]:
     stmt = select(Finding).options(joinedload(Finding.asset)).order_by(Finding.severity.desc(), desc(Finding.created_at))
     if status == "open":
-        stmt = stmt.where(Finding.status.notin_(["Approved", "Dismissed"]))
+        stmt = stmt.where(Finding.status.notin_(["Approved", "Dismissed", "Resolved"]))
     elif status:
         stmt = stmt.where(Finding.status == status)
     if kind:
@@ -273,10 +288,39 @@ def decide_finding(finding_id: int, payload: ReviewDecision, db: Session = Depen
     finding = db.get(Finding, finding_id)
     if not finding:
         raise HTTPException(404, "Finding not found")
-    status = {"confirm": "Confirmed issue", "dismiss": "Dismissed", "correction": "Sent for Correction", "clarify": "Needs clarification", "approve": "Approved"}[payload.action]
-    finding.status = status; finding.owner = payload.owner; finding.reviewed_at = now_utc()
-    log(db, "review_decision", f"Finding {finding.code}: {status}", payload.comment or finding.title, payload.owner)
+    status = {"confirm": "Confirmed issue", "dismiss": "Dismissed", "correction": "Sent for Correction", "clarify": "Needs clarification", "approve": "Approved", "resolve": "Resolved"}[payload.action]
+    changed = finding.status != status or (payload.owner is not None and finding.owner != payload.owner)
+    finding.status = status
+    if payload.owner is not None:
+        finding.owner = payload.owner
+    if changed:
+        finding.reviewed_at = now_utc()
+        log(db, "review_decision", f"Finding {finding.code}: {status}", payload.comment or finding.title, finding.owner)
     db.commit(); db.refresh(finding)
+    return finding_dict(db.scalar(select(Finding).options(joinedload(Finding.asset)).where(Finding.id == finding.id)))
+
+
+@app.patch("/api/findings/{finding_id}/assignment")
+def assign_finding(finding_id: int, payload: ReviewAssignment, db: Session = Depends(get_db)) -> dict:
+    finding = db.get(Finding, finding_id)
+    if not finding:
+        raise HTTPException(404, "Finding not found")
+    owner = payload.owner.strip()
+    if not owner:
+        raise HTTPException(422, "Choose a reviewer before saving the assignment")
+    due_date = payload.due_date.isoformat() if payload.due_date else None
+    status_changed = finding.status not in {"Approved", "Dismissed", "Resolved", "Sent for Correction", "Confirmed issue", "In Review"}
+    if finding.owner != owner or finding.due_date != due_date or status_changed:
+        previous = f"{finding.owner or 'Unassigned'} · due {finding.due_date or 'not set'}"
+        previous_status = finding.status
+        finding.owner = owner
+        finding.due_date = due_date
+        if status_changed:
+            finding.status = "In Review"
+        log(db, "review_assignment", f"Finding {finding.code} assigned to {owner}",
+            f"Previous assignment: {previous}. New due date: {due_date or 'not set'}. Status: {previous_status} -> {finding.status}. {payload.comment}".strip(), owner)
+        db.commit()
+    db.refresh(finding)
     return finding_dict(db.scalar(select(Finding).options(joinedload(Finding.asset)).where(Finding.id == finding.id)))
 
 
@@ -333,7 +377,9 @@ def audit(q: str = "", limit: int = Query(default=100, ge=1, le=500), db: Sessio
 
 @app.get("/api/processing-capabilities")
 def processing_capabilities() -> dict:
-    return {"formats": ["TXT", "CSV", "JSON", "text-based PDF", "PNG", "JPG", "WEBP", "TIFF"],
+    return {"formats": ["TXT", "CSV", "XLSX", "DOCX", "JSON", "PDF", "PNG", "JPG", "WEBP", "TIFF"],
             "csv": ["pandas", "Python csv fallback"], "pdf": "pypdf text extraction",
+            "xlsx": "OpenXML workbook parsing; no optional Excel engine required",
+            "docx": "OpenXML document text extraction",
             "image_ocr": "Pillow + pytesseract, requires the Tesseract executable", "tesseract_available": ocr_available(),
-            "scanned_pdf_ocr": "not enabled; scanned PDFs are labeled Needs OCR", "size_limit_mb": int(os.getenv("MAX_UPLOAD_MB", "20"))}
+            "scanned_pdf_ocr": "embedded page images are OCR'd when Tesseract is available; otherwise marked Needs OCR", "size_limit_mb": int(os.getenv("MAX_UPLOAD_MB", "20"))}
