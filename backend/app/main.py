@@ -5,7 +5,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Generator
 
-from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select, desc, func, inspect, text
@@ -30,7 +30,7 @@ def get_db() -> Generator[Session, None, None]:
         db.close()
 
 
-def log(db: Session, event_type: str, summary: str, details: str = "", actor: str = "Ayan Sharma") -> None:
+def log(db: Session, event_type: str, summary: str, details: str = "", actor: str = "Guest") -> None:
     db.add(AuditEvent(event_type=event_type, summary=summary[:500], details=details, actor=actor))
 
 
@@ -38,7 +38,7 @@ def seed(db: Session) -> None:
     if db.scalar(select(func.count(Fact.id))) > 0:
         return
     facts = [
-        Fact(name="Monthly plan price", value="₹599 / month", source="Pricing page · approved Nov 2", scope="All channels", version=2, effective_date="2026-11-02", approved_by="Ayan Sharma"),
+        Fact(name="Monthly plan price", value="₹599 / month", source="Pricing page · approved Nov 2", scope="All channels", version=2, effective_date="2026-11-02", approved_by="BrandGuard demo"),
         Fact(name="Annual plan price", value="₹5,990 / year", source="Pricing page · approved Oct 14", scope="All channels", effective_date="2026-10-14"),
         Fact(name="Free trial", value="14 days", source="Product terms · approved Oct 28", scope="Website, paid social", effective_date="2026-10-28"),
         Fact(name="Core feature", value="Unlimited projects", source="Product brief · approved Oct 21", scope="All channels", effective_date="2026-10-21"),
@@ -72,9 +72,9 @@ def seed(db: Session) -> None:
     claim_asset = db.scalar(select(Asset).where(Asset.name == "Spring refresh · social post"))
     db.add(Finding(code="BG-SEED-CLAIM-1", asset_id=claim_asset.id, title="Promotional claim needs evidence", kind="claim_verification", severity="High", status="Needs Verification", detected_value=claim.wording, excerpt=claim.wording, reason="No supporting source is attached for the claim's offer scope or calculation.", suggested_action="Attach current supporting evidence for a human reviewer. Missing evidence is not proof that the claim is false.", confidence="Medium", match_type="Claim evidence status"))
     db.add_all([
-        AuditEvent(event_type="fact_change", summary="Monthly plan price updated", details="₹499 → ₹599 / month · effective Nov 2, 2026. Source: Pricing page. Approved by Ayan Sharma."),
+        AuditEvent(event_type="fact_change", summary="Monthly plan price updated", details="₹499 → ₹599 / month · effective Nov 2, 2026. Source: Pricing page. Approved by BrandGuard demo."),
         AuditEvent(event_type="scan", summary="Change impact scan completed", details="9 seeded sample assets · 5 potential price matches returned for review."),
-        AuditEvent(event_type="review", summary="Brand guide v3 approved", details="Logo use and tone guidance confirmed by Pragya Sharma.", actor="Pragya Sharma"),
+        AuditEvent(event_type="review", summary="Brand guide v3 approved", details="Logo use and tone guidance confirmed by a workspace reviewer.", actor="BrandGuard demo"),
     ])
     db.commit()
 
@@ -88,6 +88,9 @@ def initialize() -> None:
             connection.execute(text("ALTER TABLE findings ADD COLUMN due_date VARCHAR(10)"))
         if "location" not in finding_columns:
             connection.execute(text("ALTER TABLE findings ADD COLUMN location VARCHAR(160) NOT NULL DEFAULT 'Text excerpt'"))
+        connection.execute(text("UPDATE facts SET approved_by='BrandGuard demo' WHERE name='Monthly plan price' AND version=2 AND approved_by='Ayan Sharma'"))
+        connection.execute(text("UPDATE audit_events SET actor='BrandGuard demo', details=replace(details, 'Ayan Sharma', 'BrandGuard demo') WHERE summary='Monthly plan price updated' AND actor='Ayan Sharma'"))
+        connection.execute(text("UPDATE audit_events SET actor='BrandGuard demo', details='Logo use and tone guidance confirmed by a workspace reviewer.' WHERE summary='Brand guide v3 approved' AND actor='Pragya Sharma'"))
     with SessionLocal() as db:
         seed(db)
 
@@ -152,16 +155,16 @@ def list_facts(active_only: bool = True, db: Session = Depends(get_db)) -> list[
 
 
 @app.post("/api/facts", status_code=201)
-def create_fact(payload: FactCreate, db: Session = Depends(get_db)) -> dict:
+def create_fact(payload: FactCreate, actor: str = Header(default="Guest", alias="X-Workspace-Actor"), db: Session = Depends(get_db)) -> dict:
     latest = db.scalar(select(Fact).where(Fact.name == payload.name).order_by(desc(Fact.version)).limit(1))
     version = (latest.version + 1) if latest else 1
     if latest:
         latest.active = False
     fact = Fact(**payload.model_dump(), version=version)
     db.add(fact); db.flush()
-    log(db, "fact_change", f"Approved fact saved: {fact.name}", f"Version {version}: {fact.value}. Source: {fact.source}.", fact.approved_by)
+    log(db, "fact_change", f"Approved fact saved: {fact.name}", f"Version {version}: {fact.value}. Source: {fact.source}.", actor)
     db.commit(); db.refresh(fact)
-    run_scan(db, trigger_fact=fact)
+    run_scan(db, trigger_fact=fact, actor=actor)
     db.refresh(fact)
     return fact_dict(fact)
 
@@ -182,16 +185,16 @@ def list_assets(q: str = "", status: str = "", channel: str = "", db: Session = 
 
 
 @app.post("/api/assets/register", status_code=201)
-def register_asset(name: str, text: str, channel: str = "Registered content", db: Session = Depends(get_db)) -> dict:
+def register_asset(name: str, text: str, channel: str = "Registered content", actor: str = Header(default="Guest", alias="X-Workspace-Actor"), db: Session = Depends(get_db)) -> dict:
     if not text.strip():
         raise HTTPException(422, "Registered content must include text")
     asset = Asset(name=name[:300], channel=channel[:100], extracted_text=text[:2_000_000], processing_status="Indexed", extraction_method="Registered text")
-    db.add(asset); db.flush(); log(db, "asset_registered", f"Content registered: {asset.name}", f"Channel: {channel}")
+    db.add(asset); db.flush(); log(db, "asset_registered", f"Content registered: {asset.name}", f"Channel: {channel}", actor)
     db.commit(); db.refresh(asset); return asset_dict(asset)
 
 
 @app.post("/api/assets/upload", status_code=201)
-async def upload_assets(files: list[UploadFile] = File(...), channel: str = "Uploaded assets", db: Session = Depends(get_db)) -> list[dict]:
+async def upload_assets(files: list[UploadFile] = File(...), channel: str = "Uploaded assets", actor: str = Header(default="Guest", alias="X-Workspace-Actor"), db: Session = Depends(get_db)) -> list[dict]:
     results = []
     for upload in files:
         content = await upload.read()
@@ -205,16 +208,16 @@ async def upload_assets(files: list[UploadFile] = File(...), channel: str = "Upl
         asset = Asset(name=upload.filename[:300], media_type=upload.content_type or "application/octet-stream", channel=channel[:100],
                       filename=stored_filename, extracted_text=text[:2_000_000], processing_status=status, extraction_method=method)
         db.add(asset); db.flush()
-        log(db, "asset_uploaded", f"Asset uploaded: {asset.name}", f"{asset.processing_status} · {asset.extraction_method}")
+        log(db, "asset_uploaded", f"Asset uploaded: {asset.name}", f"{asset.processing_status} · {asset.extraction_method}", actor)
         results.append(asset)
     db.commit()
     for asset in results:
         db.refresh(asset)
-    run_scan(db)
+    run_scan(db, actor=actor)
     return [asset_dict(a) for a in results]
 
 
-def run_scan(db: Session, trigger_fact: Fact | None = None) -> dict:
+def run_scan(db: Session, trigger_fact: Fact | None = None, actor: str = "Guest") -> dict:
     fact = trigger_fact or db.scalar(select(Fact).where(Fact.name == "Monthly plan price", Fact.active.is_(True)).order_by(desc(Fact.version)).limit(1))
     if fact is None:
         return {"checked": 0, "matches": 0}
@@ -258,15 +261,15 @@ def run_scan(db: Session, trigger_fact: Fact | None = None) -> dict:
                            confidence="Low", match_type=suggestion["match_type"], location="Text excerpt"))
             created += 1
     db.flush()
-    log(db, "scan", "Change impact scan completed", f"{len(assets)} indexed assets examined; {len(active_assets)} exact/normalized price asset matches; {created} new findings.")
+    log(db, "scan", "Change impact scan completed", f"{len(assets)} indexed assets examined; {len(active_assets)} exact/normalized price asset matches; {created} new findings.", actor)
     db.commit()
     return {"checked": len(assets), "matches": len(active_assets), "new_findings": created,
             "coverage": "Uploaded and registered assets only; no live channels are connected."}
 
 
 @app.post("/api/scans")
-def scan(db: Session = Depends(get_db)) -> dict:
-    return run_scan(db)
+def scan(actor: str = Header(default="Guest", alias="X-Workspace-Actor"), db: Session = Depends(get_db)) -> dict:
+    return run_scan(db, actor=actor)
 
 
 @app.get("/api/findings")
@@ -284,7 +287,7 @@ def list_findings(status: str = "", kind: str = "", q: str = "", db: Session = D
 
 
 @app.post("/api/findings/{finding_id}/decision")
-def decide_finding(finding_id: int, payload: ReviewDecision, db: Session = Depends(get_db)) -> dict:
+def decide_finding(finding_id: int, payload: ReviewDecision, actor: str = Header(default="Guest", alias="X-Workspace-Actor"), db: Session = Depends(get_db)) -> dict:
     finding = db.get(Finding, finding_id)
     if not finding:
         raise HTTPException(404, "Finding not found")
@@ -295,13 +298,13 @@ def decide_finding(finding_id: int, payload: ReviewDecision, db: Session = Depen
         finding.owner = payload.owner
     if changed:
         finding.reviewed_at = now_utc()
-        log(db, "review_decision", f"Finding {finding.code}: {status}", payload.comment or finding.title, finding.owner)
+        log(db, "review_decision", f"Finding {finding.code}: {status}", payload.comment or finding.title, actor)
     db.commit(); db.refresh(finding)
     return finding_dict(db.scalar(select(Finding).options(joinedload(Finding.asset)).where(Finding.id == finding.id)))
 
 
 @app.patch("/api/findings/{finding_id}/assignment")
-def assign_finding(finding_id: int, payload: ReviewAssignment, db: Session = Depends(get_db)) -> dict:
+def assign_finding(finding_id: int, payload: ReviewAssignment, actor: str = Header(default="Guest", alias="X-Workspace-Actor"), db: Session = Depends(get_db)) -> dict:
     finding = db.get(Finding, finding_id)
     if not finding:
         raise HTTPException(404, "Finding not found")
@@ -318,7 +321,7 @@ def assign_finding(finding_id: int, payload: ReviewAssignment, db: Session = Dep
         if status_changed:
             finding.status = "In Review"
         log(db, "review_assignment", f"Finding {finding.code} assigned to {owner}",
-            f"Previous assignment: {previous}. New due date: {due_date or 'not set'}. Status: {previous_status} -> {finding.status}. {payload.comment}".strip(), owner)
+            f"Previous assignment: {previous}. New due date: {due_date or 'not set'}. Status: {previous_status} -> {finding.status}. {payload.comment}".strip(), actor)
         db.commit()
     db.refresh(finding)
     return finding_dict(db.scalar(select(Finding).options(joinedload(Finding.asset)).where(Finding.id == finding.id)))
@@ -330,7 +333,7 @@ def list_claims(db: Session = Depends(get_db)) -> list[dict]:
 
 
 @app.post("/api/claims", status_code=201)
-def create_claim(payload: ClaimCreate, db: Session = Depends(get_db)) -> dict:
+def create_claim(payload: ClaimCreate, actor: str = Header(default="Guest", alias="X-Workspace-Actor"), db: Session = Depends(get_db)) -> dict:
     has_source = bool(payload.source.strip() and payload.source != "No source attached")
     claim = Claim(**payload.model_dump(), evidence_status="Source not independently verified" if has_source else "Needs Verification")
     db.add(claim); db.flush()
@@ -340,12 +343,12 @@ def create_claim(payload: ClaimCreate, db: Session = Depends(get_db)) -> dict:
                       status=claim.evidence_status, detected_value=claim.wording, excerpt=claim.wording,
                       reason="No supporting source is attached." if not has_source else "A source is attached but it has not been independently checked for the claim's date and scope.",
                       suggested_action="Attach relevant evidence and have a human reviewer assess its date, issuer and scope.", confidence="Medium", match_type="Claim evidence status")
-    db.add(finding); log(db, "claim_registered", "Promotional claim registered", f"{claim.wording} · {claim.evidence_status}")
+    db.add(finding); log(db, "claim_registered", "Promotional claim registered", f"{claim.wording} · {claim.evidence_status}", actor)
     db.commit(); db.refresh(claim); return claim_dict(claim)
 
 
 @app.patch("/api/claims/{claim_id}/evidence")
-def update_claim_evidence(claim_id: int, payload: EvidenceUpdate, db: Session = Depends(get_db)) -> dict:
+def update_claim_evidence(claim_id: int, payload: EvidenceUpdate, actor: str = Header(default="Guest", alias="X-Workspace-Actor"), db: Session = Depends(get_db)) -> dict:
     claim = db.get(Claim, claim_id)
     if not claim:
         raise HTTPException(404, "Claim not found")
@@ -355,7 +358,7 @@ def update_claim_evidence(claim_id: int, payload: EvidenceUpdate, db: Session = 
     finding = db.scalar(select(Finding).where(Finding.kind == "claim_verification", Finding.detected_value == claim.wording).order_by(desc(Finding.id)))
     if finding:
         finding.status = "In Review"; finding.reason = "Evidence supplied; a person still needs to assess source relevance and scope."
-    log(db, "claim_evidence_added", "Claim evidence attached for review", f"{claim.wording} · {claim.source}")
+    log(db, "claim_evidence_added", "Claim evidence attached for review", f"{claim.wording} · {claim.source}", actor)
     db.commit(); db.refresh(claim); return claim_dict(claim)
 
 

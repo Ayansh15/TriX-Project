@@ -9,7 +9,7 @@ class FactCreate(BaseModel):
     source: str = Field(default="Source not attached", max_length=700)
     scope: str = Field(default="All channels", max_length=300)
     effective_date: str | None = None
-    approved_by: str = "Ayan Sharma"
+    approved_by: str = "BrandGuard demo"
 
 
 class FactOut(FactCreate):

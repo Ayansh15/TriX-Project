@@ -38,7 +38,7 @@ Open `http://127.0.0.1:5173`. Vite proxies `/api` and `/files` to FastAPI. SQLit
 
 ## First-use walkthrough
 
-The first visit opens a short guide; use **Guide** in the header to replay it. The main journey is:
+The first visit asks you to continue as a guest or create a local demo profile with a display name and account ID. The profile is stored in this browser and is not verified by an account server. The first visit then opens a short guide; use **Guide** in the header to replay it. The main journey is:
 
 1. **Brand facts**: add or update the approved value, source, scope, effective date, and approver. Saving a new version triggers a scan.
 2. **Asset library**: upload or register content. Open **Preview extracted text** on an asset to review what the scanner received and why a file may need manual checking.
@@ -72,7 +72,7 @@ The backend tests cover extraction, explainable match fields, upload error handl
 
 ## Honest scope
 
-Scans cover files uploaded or registered in the workspace only. The product does not connect to or publish to websites, email, social platforms, or ad accounts. Claim evidence is stored for human review and is not independently checked against registries. Market-price values shown in the insights prototype are illustrative; no competitor feed or model-generated recommendation is connected. Reviewer names are a demo list, not authenticated accounts or permission roles.
+Scans cover files uploaded or registered in the workspace only. The product does not connect to or publish to websites, email, social platforms, or ad accounts. Claim evidence is stored for human review and is not independently checked against registries. Market-price values shown in the insights prototype are illustrative; no competitor feed or model-generated recommendation is connected. Demo profiles are local labels only, not authenticated accounts or permission roles; reviewer names are a demo list.
 
 GitHub Pages can host the built frontend, but this API-backed app also needs a separately hosted API and database. The repository's Docker setup is the complete local deployment path. A public deployment URL must be configured and verified before it is submitted as a judge-accessible link.
 
